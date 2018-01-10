@@ -4,6 +4,7 @@ DEFAULTS = {
     'es.timeout': 60,
     'testdata.path': './test-data',
     'testdata.maxfiles': -1, # -1 for unlimited
+    'testdata.create.event': 1,
 }
 
 # get a configuration value for the specified key from

@@ -61,6 +61,7 @@ if __name__ == "__main__":
     # insert some protobuf data into the db
     max_files = config.get('testdata.maxfiles')
     data_path = config.get('testdata.path')
+    do_create_events = config.get('testdata.create.event')
     print "Loading data from", data_path
     tstart = time.time()
     for ifile, msgfile in enumerate(messages.load_messages(data_path)):
@@ -88,19 +89,20 @@ if __name__ == "__main__":
                 print "Squelching further output."
                 sys.stdout.flush()
 
-            for evt in xb.events:
-                event_id = util.make_uuid("%s%d"%(xb_id, evt.timestamp))
-                result = es.index(
-                    index='cf-event',
-                    doc_type='event',
-                    id=event_id,
-                    body=messages.event_to_doc(msg, xb, evt)
-                )
+            if do_create_events:
+                for evt in xb.events:
+                    event_id = util.make_uuid("%s%d"%(xb_id, evt.timestamp))
+                    result = es.index(
+                        index='cf-event',
+                        doc_type='event',
+                        id=event_id,
+                        body=messages.event_to_doc(msg, xb, evt)
+                    )
 
 
     print "refreshing exposure index..."
     es.indices.refresh(index='cf-exposure')
-        result = es.search(index='cf-exposure')
+    result = es.search(index='cf-exposure')
     print "Query result:"
     print result
     print len(result['hits'])
