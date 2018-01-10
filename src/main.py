@@ -1,93 +1,106 @@
 #!/usr/bin/env python
 
 import sys
-from elasticsearch import Elasticsearch
+import time
 from elasticsearch.exceptions import NotFoundError
 import crayfis_data_pb2 as pb
-from glob import glob
-import uuid
 
-NAMESPACE_UUID = uuid.UUID(int=1234)
-
-def make_uuid(to_hash):
-    return uuid.uuid3(NAMESPACE_UUID, to_hash.encode('utf-8'))
-
-def xb_to_doc(msg, xb):
-    duration = xb.end_time - xb.start_time
-    return {
-            'start_time': xb.start_time,
-            'end_time': xb.end_time,
-            'duration': duration,
-            'device_id': msg.device_id,
-            'battery_temp': xb.battery_temp,
-            'weighted_temp': xb.battery_temp*duration,
-            'L1_thresh': xb.L1_thresh,
-            'L2_skip': xb.L2_skip,
-            'bg_avg': xb.bg_avg,
-            'n_events': len(xb.events),
-            'n_pixels': sum([len(evt.pixels) for evt in xb.events]),
-            'event_rate': len(xb.events)/duration,
-            'L1_processed': xb.L1_processed,
-    }
+# local packages
+import util
+import config
+import messages
 
 if __name__ == "__main__":
-    es = Elasticsearch(['elastic'])
+    # try to connect to elasticsearch
 
-    # create an index for XBs
-    INDEX_NAME = 'test-index'
+    print "Connecting to elasticsearch at '%s'..."%config.get('es.server')
+    es = util.connect_elastic(config.get('es.server'), config.get('es.timeout'))
+    if es:
+        print "Connected to elasticsearch!"
+
+    print es
+    print es.cluster
+    print es.cluster.get_settings()
+    print es.cluster.health()
+
+    # create a new index for XBs
     try:
-        es.indices.delete(INDEX_NAME)
+        es.indices.delete('cf-exposure')
     except NotFoundError:
         pass
 
-    es.indices.create(INDEX_NAME, body={
+    es.indices.create('cf-exposure', body={
         'mappings': {
             'exposure': {
                 'properties': {
-                    'device_id': {
-                        'type': 'text',
-                        'fielddata': True,
-                        }
-                    }
-                }
+                    'device_id': { 'type': 'keyword' },
+                    'start_time': { 'type': 'date' },
+                    'end_time': { 'type': 'date' },
+                    'location': { 'type': 'geo_point' },
+                    },
+                },
+            }
+        })
+
+    try:
+        es.indices.delete('cf-event')
+    except NotFoundError:
+        pass
+    es.indices.create('cf-event', body={
+        'mappings': {
+            'event': {
+                'properties': {
+                    'device_id': { 'type': 'keyword' },
+                    'timestamp': { 'type': 'date' },
+                    'location': { 'type': 'geo_point' },
+                    },
+                },
             }
         })
 
     # insert some protobuf data into the db
-    MAX_FILES = 100
-    for ifile, fname in enumerate(glob("test-data/*.msg")):
-        if ifile >= MAX_FILES: break
+    max_files = config.get('testdata.maxfiles')
+    data_path = config.get('testdata.path')
+    print "Loading data from", data_path
+    tstart = time.time()
+    for ifile, msgfile in enumerate(messages.load_messages(data_path)):
+        if max_files>0 and ifile >= max_files: break
+        if (ifile+1)%1000==0:
+            elapsed = time.time()-tstart
+            print 'Processed %d files in %ds (%0.2fHz)' % (ifile, elapsed, ifile/elapsed)
 
-        msg = pb.CrayonMessage.FromString(open(fname).read())
+        msg = pb.CrayonMessage.FromString(msgfile.read())
         chunk = pb.DataChunk.FromString(msg.payload)
 
         for xb in chunk.exposure_blocks:
-            xb_id = make_uuid("%s%d"%(msg.device_id, xb.start_time))
+            xb_id = util.make_uuid("%s%d"%(msg.device_id, xb.start_time))
             result = es.index(
-                index=INDEX_NAME,
+                index='cf-exposure',
                 doc_type='exposure',
                 id=xb_id,
-                body=xb_to_doc(msg, xb)
+                body=messages.xb_to_doc(msg, xb)
             )
             if ifile < 20:
                 print "Inserted XB:"
                 print result
                 print 
-            elif ifile == 100:
+            elif ifile == 20:
                 print "Squelching further output."
                 sys.stdout.flush()
 
-    print "refreshing index..."
-    es.indices.refresh(index=INDEX_NAME)
-    # now try a query to just grab all of the XBs
+            for evt in xb.events:
+                event_id = util.make_uuid("%s%d"%(xb_id, evt.timestamp))
+                result = es.index(
+                    index='cf-event',
+                    doc_type='event',
+                    id=event_id,
+                    body=messages.event_to_doc(msg, xb, evt)
+                )
 
-    #result = es.get(index=INDEX_NAME, doc_type='exposure', id='34ad2765-a098-35c8-9263-db8779c8e996')
-    #print result
 
-    #result = es.search(index=INDEX_NAME, body={
-    #    "query": {"match_all": {}}
-    #    })
-    result = es.search(index=INDEX_NAME)
+    print "refreshing exposure index..."
+    es.indices.refresh(index='cf-exposure')
+        result = es.search(index='cf-exposure')
     print "Query result:"
     print result
     print len(result['hits'])
@@ -95,7 +108,7 @@ if __name__ == "__main__":
 
 
     # now a more complicated search aggregating by device ID
-    result = es.search(index=INDEX_NAME, body={
+    result = es.search(index='cf-exposure', body={
         'size': 0,
         'aggs': {
             'devices': {
@@ -159,6 +172,6 @@ if __name__ == "__main__":
         print '  total exposure: ', total_exposure
         print '  average temp:   ', average_temp
         print '  weighted avg:   ', sum_temp_weighted/total_exposure
-        print '  L2_skip/L1_pass:  %d/%d=%0.5f%%'%(l2_skips, l1_passes, 100.*l2_skips/l1_passes)
+        print '  L2_skip/L1_pass:  %d/%d=%0.5f%%'%(l2_skips, l1_passes, 100.*l2_skips/l1_passes if (l1_passes>0) else 0)
         print '  avg framerate:  ', sum_L1_processed/total_exposure*1e3
         print

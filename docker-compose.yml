@@ -1,0 +1,38 @@
+version: '3'
+networks:
+  # network for containers that need to communicate with elasticsearch
+  esnet:
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.1.1
+    environment:
+      - cluster.name=es-cluster
+    #  - discovery.type=single-node
+    networks:
+      - esnet
+  elasticsearch2:
+    # secondary elasticserver to speed things up a bit and test cluster features
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.1.1
+    environment:
+      - cluster.name=es-cluster
+      - discovery.zen.ping.unicast.hosts=elasticsearch
+    networks:
+      - esnet
+  kibana:
+    image: docker.elastic.co/kibana/kibana:6.1.1
+    ports:
+      - "5601:5601"
+    networks:
+      - esnet
+  es-test:
+    build: .
+    volumes:
+      # mount some local test data into the container at /data
+      - ./test-data:/data:ro
+    environment:
+      - es.server=elasticsearch
+      - es.timeout=60
+      - testdata.path=/data
+      - testdata.maxfiles=-1
+    networks:
+      - esnet

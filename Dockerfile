@@ -12,8 +12,6 @@ RUN pip install \
 
 WORKDIR /app
 
-ADD test-data.tgz /app/
-
 ADD ./src/ /app/
 
 CMD ./main.py
