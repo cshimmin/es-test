@@ -1,22 +1,20 @@
 Setup
 ====
 
-1) Start an elastic server:
+1) Copy `crayfis_data_pb2.py` to `./src/`
+
+2) Put some data in `./test-data/` (should have the same `YYYY/MM/DD/HOST/HH.tar.gz` format as on the server).
+
+3) Bring up services:
 
 ```
-docker run -p 9200:9200 -p 9300:9300 --name es-server -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:6.1.1
+docker-compose up [-d] kibana elasticsearch [elasticsearch2]
 ```
-
-2) Get some `.msg` files and put them in `./test-data.tgz`.
-
-3) Copy `crayfis_data_pb2.py` to `./src/`
 
 4) Build & start the test container:
 
 ```
-docker build -t es-test .
+docker-compose up --build es-test
 ```
 
-```
-docker run --link es-server:elastic es-test
-```
+5) Check out kibana at `http://localhost:5601`
