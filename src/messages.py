@@ -20,12 +20,15 @@ def load_messages(data_path, verbose=False):
 
 # convert an exposure block (with a cryon message as context) to a
 # doctument representation for indexing into elasticsearch.
-def xb_to_doc(msg, xb):
+def xb_to_doc(msg, xb, rc):
     duration = xb.end_time - xb.start_time
-    return {
+    duration_nano = xb.end_time_nano - xb.start_time_nano
+    document = {
         'start_time': xb.start_time,
         'end_time': xb.end_time,
+        'start_time_ntp': xb.start_time_ntp,
         'duration': duration,
+        'duration_nano': duration_nano,
         'device_id': msg.device_id,
         'battery_temp': xb.battery_temp,
         'weighted_temp': xb.battery_temp*duration,
@@ -38,6 +41,12 @@ def xb_to_doc(msg, xb):
         'L1_processed': xb.L1_processed,
         'location': [ xb.gps_lon, xb.gps_lat ],
     }
+    if rc:
+        document['crayfis_build'] = rc['_source']['crayfis_build']
+    else:
+        document['crayfis_build'] = 'unknown'
+
+    return document
 
 def event_to_doc(msg, xb, evt):
     document = {

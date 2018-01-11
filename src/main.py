@@ -4,6 +4,7 @@ import sys
 import time
 from elasticsearch.exceptions import NotFoundError
 import crayfis_data_pb2 as pb
+import uuid
 
 # local packages
 import util
@@ -66,20 +67,46 @@ if __name__ == "__main__":
     tstart = time.time()
     for ifile, msgfile in enumerate(messages.load_messages(data_path)):
         if max_files>0 and ifile >= max_files: break
-        if (ifile+1)%1000==0:
-            elapsed = time.time()-tstart
-            print 'Processed %d files in %ds (%0.2fHz)' % (ifile, elapsed, ifile/elapsed)
 
         msg = pb.CrayonMessage.FromString(msgfile.read())
         chunk = pb.DataChunk.FromString(msg.payload)
 
+        for rc in chunk.run_configs:
+            run_id = uuid.UUID(int=rc.id_lo)
+            result = es.index(
+                index='cf-runconfig',
+                doc_type='runconfig',
+                id=run_id,
+                body={
+                    'crayfis_build': rc.crayfis_build,
+                    'start_time': rc.start_time,
+                    })
+            # update any existing exposure blocks referring to this run
+            es.update_by_query(
+                index='cf-exposure',
+                doc_type='exposure',
+                body={
+                    "script" : "ctx._source.crayfis_build = '%s'"%(rc.crayfis_build),
+                    "query": {
+                        "term": {
+                            "run_id": str(run_id),
+                            },
+                        },
+                    })
+
         for xb in chunk.exposure_blocks:
+            # try to find the runconfig for this XB
+            try:
+                rc = es.get(index='cf-runconfig', doc_type='runconfig', id=uuid.UUID(int=xb.run_id))
+            except NotFoundError:
+                rc = None
+            
             xb_id = util.make_uuid("%s%d"%(msg.device_id, xb.start_time))
             result = es.index(
                 index='cf-exposure',
                 doc_type='exposure',
                 id=xb_id,
-                body=messages.xb_to_doc(msg, xb)
+                body=messages.xb_to_doc(msg, xb, rc)
             )
             if ifile < 20:
                 print "Inserted XB:"
@@ -98,6 +125,13 @@ if __name__ == "__main__":
                         id=event_id,
                         body=messages.event_to_doc(msg, xb, evt)
                     )
+
+        # done processing.
+        if (ifile+1)%500==0:
+            elapsed = time.time()-tstart
+            print 'Processed %d files in %ds (%0.2fHz)' % (ifile+1, elapsed, ifile/elapsed)
+            sys.stdout.flush()
+
 
 
     print "refreshing exposure index..."
